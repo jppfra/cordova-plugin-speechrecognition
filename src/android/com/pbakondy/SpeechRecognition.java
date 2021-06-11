@@ -7,6 +7,7 @@ import org.apache.cordova.CordovaInterface;
 import org.apache.cordova.CordovaPlugin;
 import org.apache.cordova.CordovaWebView;
 import org.apache.cordova.PluginResult;
+import org.apache.cordova.*;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -26,15 +27,23 @@ import android.speech.SpeechRecognizer;
 
 import android.util.Log;
 import android.view.View;
-
+import android.media.AudioManager;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import android.widget.Toast;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
+import android.bluetooth.BluetoothDevice;
+import android.os.Looper;
+import android.app.PendingIntent;
+import android.app.AlarmManager;
 
 public class SpeechRecognition extends CordovaPlugin {
 
   private static final String LOG_TAG = "SpeechRecognition";
 
+  public static SpeechRecognition instance = null;
   private static final int REQUEST_CODE_PERMISSION = 2001;
   private static final int REQUEST_CODE_SPEECH = 2002;
   private static final String IS_RECOGNITION_AVAILABLE = "isRecognitionAvailable";
@@ -57,11 +66,12 @@ public class SpeechRecognition extends CordovaPlugin {
   private Context context;
   private View view;
   private SpeechRecognizer recognizer;
-
+  AudioManager audioManager;
   @Override
   public void initialize(CordovaInterface cordova, CordovaWebView webView) {
     super.initialize(cordova, webView);
 
+    instance = this;
     activity = cordova.getActivity();
     context = webView.getContext();
     view = webView.getView();
@@ -74,6 +84,13 @@ public class SpeechRecognition extends CordovaPlugin {
         recognizer.setRecognitionListener(listener);
       }
     });
+    IntentFilter myfilter = new IntentFilter();
+    myfilter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
+    myfilter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECT_REQUESTED);
+    myfilter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
+    activity.registerReceiver(bleReceiver, myfilter);
+
+    audioManager = (AudioManager)context.getSystemService(context.AUDIO_SERVICE);
   }
 
   @Override
@@ -92,6 +109,8 @@ public class SpeechRecognition extends CordovaPlugin {
 
       if (START_LISTENING.equals(action)) {
         if (!isRecognitionAvailable()) {
+          
+
           callbackContext.error(NOT_AVAILABLE);
           return true;
         }
@@ -116,7 +135,9 @@ public class SpeechRecognition extends CordovaPlugin {
         Boolean showPartial = args.optBoolean(3, false);
         Boolean showPopup = args.optBoolean(4, true);
         startListening(lang, matches, prompt,showPartial, showPopup);
-
+        audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+        audioManager.startBluetoothSco();
+        audioManager.setBluetoothScoOn(true);
         return true;
       }
 
@@ -126,6 +147,9 @@ public class SpeechRecognition extends CordovaPlugin {
           @Override
           public void run() {
             if(recognizer != null) {
+              audioManager.setMode(AudioManager.MODE_NORMAL);
+              audioManager.stopBluetoothSco();
+              audioManager.setBluetoothScoOn(false);
               recognizer.stopListening();
             }
             callbackContextStop.success();
@@ -366,6 +390,50 @@ public class SpeechRecognition extends CordovaPlugin {
       }
       return message;
     }
+
+    
   }
 
+  private final BroadcastReceiver bleReceiver = new BroadcastReceiver() {
+    @Override
+    public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            BluetoothDevice device = intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE);
+
+            if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)) {
+               //connected
+               //Toast.makeText(context.getApplicationContext(),"Connected",Toast.LENGTH_SHORT).show();  
+               audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
+               audioManager.startBluetoothSco();
+               audioManager.setBluetoothScoOn(true);
+               resetApp();
+               
+            }
+            else if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
+               //disconnected
+              audioManager.setMode(AudioManager.MODE_NORMAL);
+              audioManager.stopBluetoothSco();
+              audioManager.setBluetoothScoOn(false);
+              resetApp();
+              // Toast.makeText(context.getApplicationContext(),"disconnected",Toast.LENGTH_SHORT).show();  
+            }   
+
+        }
+    };
+
+    public void resetApp()
+    {
+
+               Context appCnx = context.getApplicationContext();
+               PackageManager pm = appCnx.getPackageManager();
+               Intent mStartActivity = pm.getLaunchIntentForPackage(appCnx.getPackageName());
+
+               int mPendingIntentId = 213141;
+              PendingIntent mPendingIntent = PendingIntent
+                      .getActivity(appCnx, mPendingIntentId, mStartActivity,
+                              PendingIntent.FLAG_CANCEL_CURRENT);
+              AlarmManager mgr = (AlarmManager) appCnx.getSystemService(Context.ALARM_SERVICE);
+              mgr.set(AlarmManager.RTC, System.currentTimeMillis() + 1000, mPendingIntent);
+               Runtime.getRuntime().exit(0); 
+    }
 }
